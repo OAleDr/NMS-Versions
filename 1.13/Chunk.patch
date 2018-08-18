@@ -1,0 +1,190 @@
+--- a/net/minecraft/server/Chunk.java
++++ b/net/minecraft/server/Chunk.java
+@@ -23,6 +23,8 @@
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+ 
++import com.google.common.collect.Lists; // CraftBukkit
++
+ public class Chunk implements IChunkAccess {
+ 
+     private static final Logger e = LogManager.getLogger();
+@@ -58,6 +60,35 @@
+     private int E;
+     private final AtomicInteger F;
+ 
++    // CraftBukkit start - Neighbor loaded cache for chunk lighting and entity ticking
++    private int neighbors = 0x1 << 12;
++    public long chunkKey;
++
++    public boolean areNeighborsLoaded(final int radius) {
++        switch (radius) {
++            case 2:
++                return this.neighbors == Integer.MAX_VALUE >> 6;
++            case 1:
++                final int mask =
++                        //       x        z   offset          x        z   offset          x         z   offset
++                        (0x1 << (1 * 5 +  1 + 12)) | (0x1 << (0 * 5 +  1 + 12)) | (0x1 << (-1 * 5 +  1 + 12)) |
++                        (0x1 << (1 * 5 +  0 + 12)) | (0x1 << (0 * 5 +  0 + 12)) | (0x1 << (-1 * 5 +  0 + 12)) |
++                        (0x1 << (1 * 5 + -1 + 12)) | (0x1 << (0 * 5 + -1 + 12)) | (0x1 << (-1 * 5 + -1 + 12));
++                return (this.neighbors & mask) == mask;
++            default:
++                throw new UnsupportedOperationException(String.valueOf(radius));
++        }
++    }
++
++    public void setNeighborLoaded(final int x, final int z) {
++        this.neighbors |= 0x1 << (x * 5 + 12 + z);
++    }
++
++    public void setNeighborUnloaded(final int x, final int z) {
++        this.neighbors &= ~(0x1 << (x * 5 + 12 + z));
++    }
++    // CraftBukkit end
++
+     public Chunk(World world, int i, int j, BiomeBase[] abiomebase, ChunkConverter chunkconverter, TickList<Block> ticklist, TickList<FluidType> ticklist1, long k) {
+         this.sections = new ChunkSection[16];
+         this.h = new boolean[256];
+@@ -95,8 +126,16 @@
+         this.t = ticklist;
+         this.u = ticklist1;
+         this.A = k;
++        // CraftBukkit start
++        this.bukkitChunk = new org.bukkit.craftbukkit.CraftChunk(this);
++        this.chunkKey = ChunkCoordIntPair.a(this.locX, this.locZ);
+     }
+ 
++    public org.bukkit.Chunk bukkitChunk;
++    public boolean mustSave;
++    public boolean newChunk;
++    // CraftBukkit end
++
+     public Chunk(World world, ProtoChunk protochunk, int i, int j) {
+         this(world, i, j, protochunk.getBiomeIndex(), protochunk.v(), protochunk.n(), protochunk.o(), protochunk.m());
+ 
+@@ -136,14 +175,15 @@
+             HeightMap.Type heightmap_type = (HeightMap.Type) iterator.next();
+ 
+             if (heightmap_type.c() == HeightMap.Use.LIVE_WORLD) {
+-                ((HeightMap) this.heightMap.computeIfAbsent(heightmap_type, (heightmap_type) -> {
+-                    return new HeightMap(this, heightmap_type);
++                ((HeightMap) this.heightMap.computeIfAbsent(heightmap_type, (heightmap_type1) -> { // CraftBukkit - decompile error
++                    return new HeightMap(this, heightmap_type1); // CraftBukkit - decompile error
+                 })).a(protochunk.b(heightmap_type).b());
+             }
+         }
+ 
+         this.y = true;
+         this.a(ChunkStatus.FULLCHUNK);
++        this.newChunk = true; // CraftBukkit
+     }
+ 
+     public Set<BlockPosition> t() {
+@@ -474,7 +514,8 @@
+                     }
+                 }
+ 
+-                if (!this.world.isClientSide) {
++                // CraftBukkit - Don't place while processing the BlockPlaceEvent, unless it's a BlockContainer. Prevents blocks such as TNT from activating when cancelled.
++                if (!this.world.isClientSide && (!this.world.captureBlockStates || block instanceof BlockTileEntity)) {
+                     iblockdata.onPlace(this.world, blockposition, iblockdata1);
+                 }
+ 
+@@ -654,7 +695,12 @@
+ 
+     @Nullable
+     public TileEntity a(BlockPosition blockposition, Chunk.EnumTileEntityState chunk_enumtileentitystate) {
+-        TileEntity tileentity = (TileEntity) this.tileEntities.get(blockposition);
++        // CraftBukkit start
++        TileEntity tileentity = world.capturedTileEntities.get(blockposition);
++        if (tileentity == null) {
++            tileentity = (TileEntity) this.tileEntities.get(blockposition);
++        }
++        // CraftBukkit end
+ 
+         if (tileentity == null) {
+             if (chunk_enumtileentitystate == Chunk.EnumTileEntityState.IMMEDIATE) {
+@@ -689,6 +735,13 @@
+ 
+             tileentity.z();
+             this.tileEntities.put(blockposition, tileentity);
++            // CraftBukkit start
++        } else {
++            System.out.println("Attempted to place a tile entity (" + tileentity + ") at " + tileentity.position.getX() + "," + tileentity.position.getY() + "," + tileentity.position.getZ()
++                + " (" + getType(blockposition) + ") where there was no entity tile!");
++            System.out.println("Chunk coordinates: " + (this.locX * 16) + "," + (this.locZ * 16));
++            new Exception().printStackTrace();
++            // CraftBukkit end
+         }
+     }
+ 
+@@ -735,9 +788,21 @@
+         int i = aentityslice.length;
+ 
+         for (int j = 0; j < i; ++j) {
+-            EntitySlice entityslice = aentityslice[j];
++            // CraftBukkit start
++            List<Entity> newList = Lists.newArrayList(aentityslice[j]);
++            java.util.Iterator<Entity> iter = newList.iterator();
++            while (iter.hasNext()) {
++                Entity entity = iter.next();
++
++                // Do not pass along players, as doing so can get them stuck outside of time.
++                // (which for example disables inventory icon updates and prevents block breaking)
++                if (entity instanceof EntityPlayer) {
++                    iter.remove();
++                }
++            }
+ 
+-            this.world.c((Collection) entityslice);
++            this.world.c(newList);
++            // CraftBukkit end
+         }
+ 
+     }
+@@ -799,8 +864,8 @@
+             while (iterator.hasNext()) {
+                 Entity entity = (Entity) iterator.next();
+ 
+-                if (entity.getBoundingBox().c(axisalignedbb) && (predicate == null || predicate.test(entity))) {
+-                    list.add(entity);
++                if (entity.getBoundingBox().c(axisalignedbb) && (predicate == null || predicate.test((T) entity))) { // CraftBukkit - fix decompile error
++                    list.add((T) entity); // Fix decompile error
+                 }
+             }
+         }
+@@ -1006,13 +1071,13 @@
+ 
+     @Nullable
+     public LongSet b(String s) {
+-        return (LongSet) this.r.computeIfAbsent(s, (s) -> {
++        return (LongSet) this.r.computeIfAbsent(s, (s1) -> { // CraftBukkit - decompile error
+             return new LongOpenHashSet();
+         });
+     }
+ 
+     public void a(String s, long i) {
+-        ((LongSet) this.r.computeIfAbsent(s, (s) -> {
++        ((LongSet) this.r.computeIfAbsent(s, (s1) -> { // CraftBukkit - decompile error
+             return new LongOpenHashSet();
+         })).add(i);
+     }
+@@ -1061,14 +1126,14 @@
+             }
+ 
+             if (this.t instanceof ProtoChunkTickList) {
+-                ((ProtoChunkTickList) this.t).a(this.world.I(), (blockposition) -> {
+-                    return this.world.getType(blockposition).getBlock();
++                ((ProtoChunkTickList<Block>) this.t).a(this.world.I(), (blockposition1) -> { // CraftBukkit - decompile error
++                    return this.world.getType(blockposition1).getBlock();
+                 });
+             }
+ 
+             if (this.u instanceof ProtoChunkTickList) {
+-                ((ProtoChunkTickList) this.u).a(this.world.H(), (blockposition) -> {
+-                    return this.world.b(blockposition).c();
++                ((ProtoChunkTickList<FluidType>) this.u).a(this.world.H(), (blockposition1) -> { // CraftBukkit - decompile error
++                    return this.world.b(blockposition1).c();
+                 });
+             }
+ 

@@ -1,0 +1,14 @@
+--- a/net/minecraft/server/CommandTeleport.java
++++ b/net/minecraft/server/CommandTeleport.java
+@@ -116,9 +116,9 @@
+         if (entity instanceof EntityPlayer) {
+             entity.stopRiding();
+             if (worldserver == entity.world) {
+-                ((EntityPlayer) entity).playerConnection.a(d0, d1, d2, f, f1, set);
++                ((EntityPlayer) entity).playerConnection.a(d0, d1, d2, f, f1, set, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.COMMAND); // CraftBukkit
+             } else {
+-                ((EntityPlayer) entity).a(worldserver, d0, d1, d2, f, f1);
++                ((EntityPlayer) entity).a(worldserver, d0, d1, d2, f, f1, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.COMMAND); // CraftBukkit
+             }
+ 
+             entity.setHeadRotation(f);
