@@ -1,0 +1,42 @@
+--- a/net/minecraft/server/EntityPigZombie.java
++++ b/net/minecraft/server/EntityPigZombie.java
+@@ -134,16 +134,27 @@
+         } else {
+             Entity entity = damagesource.getEntity();
+ 
+-            if (entity instanceof EntityHuman && !((EntityHuman) entity).isCreative() && this.hasLineOfSight(entity)) {
++            // CraftBukkit start
++            boolean result = super.damageEntity(damagesource, f);
++
++            if (result && entity instanceof EntityHuman && !((EntityHuman) entity).isCreative() && this.hasLineOfSight(entity)) {
+                 this.a(entity);
+             }
+ 
+-            return super.damageEntity(damagesource, f);
++            return result;
++            // CraftBukkit end
+         }
+     }
+ 
+     private boolean a(Entity entity) {
+-        this.angerLevel = this.ee();
++        // CraftBukkit start
++        org.bukkit.event.entity.PigZombieAngerEvent event = new org.bukkit.event.entity.PigZombieAngerEvent((org.bukkit.entity.PigZombie) this.getBukkitEntity(), (entity == null) ? null : entity.getBukkitEntity(), this.ee());
++        this.world.getServer().getPluginManager().callEvent(event);
++        if (event.isCancelled()) {
++            return false;
++        }
++        this.angerLevel = event.getNewAnger();
++        // CraftBukkit end
+         this.soundDelay = this.random.nextInt(40);
+         if (entity instanceof EntityLiving) {
+             this.setLastDamager((EntityLiving) entity);
+@@ -217,7 +228,7 @@
+         @Override
+         protected void a(EntityInsentient entityinsentient, EntityLiving entityliving) {
+             if (entityinsentient instanceof EntityPigZombie && this.e.hasLineOfSight(entityliving) && ((EntityPigZombie) entityinsentient).a((Entity) entityliving)) {
+-                entityinsentient.setGoalTarget(entityliving);
++                entityinsentient.setGoalTarget(entityliving, org.bukkit.event.entity.EntityTargetEvent.TargetReason.TARGET_ATTACKED_NEARBY_ENTITY, true); // CraftBukkit
+             }
+ 
+         }
